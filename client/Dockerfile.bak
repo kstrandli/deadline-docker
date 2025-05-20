@@ -1,0 +1,21 @@
+FROM ubuntu:focal
+RUN apt-get update -y && apt-get install libssl-dev dos2unix nfs-common -y
+
+COPY DeadlineClient-*-linux-x64-installer.run DeadlineClient-installer.run
+RUN chmod u+x DeadlineClient-installer.run 
+#RUN	./DeadlineClient-installer.run --binariesonly true --mode unattended --enable-components proxyconfig,webservice_config
+
+
+#FROM ubuntu:focal
+# RUN apt-get update -y && apt-get install curl -y
+RUN apt-get update -y && apt-get install libssl-dev dos2unix nfs-common -y
+#COPY --from=0 /opt/Thinkbox /opt/Thinkbox
+COPY run.sh .
+RUN chmod +x run.sh && \
+    dos2unix run.sh
+
+EXPOSE 8080
+EXPOSE 4433
+
+RUN ls
+CMD ["./run.sh","deadlinercs"]

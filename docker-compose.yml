@@ -1,9 +1,28 @@
-version: "3.4"
+### Repo installation args, parsed in run.sh
+## dl_ prefix is used as identifier in the envvars, and removed when used as installation args
+x-repo-setupargs:
+  &repo-setupargs
+  dl_prefix: "/repo"
+  dl_mode: "unattended"
+  dl_debuglevel: "4"
+  dl_setpermissions: "true"
+  dl_installmongodb: "false"
+  dl_requireSSL: "false"
+  dl_dbssl: "false"
+  dl_dbhost: "db"
+  dl_dbport: "27017" 
+  dl_dbname: "deadline10db"
+  dl_dbauth: "false"
 
+### Client configuration used to build deadline.ini-file on boot.
+## dl_ prefix is used as identifier in the envvars, and removed when used in config
 x-client-config:
-  &default-environment
+  &client-config
+  dl_HttpListenPort: "8080"
+  dl_TlsListenPort: "0"
+  dl_LaunchRemoteConnectionServerAtStartup: "True"
+  dl_KeepRemoteConnectionServerRunning: "True"
   dl_LicenseMode: "LicenseFree"
-  dl_LicenseServer: ""
   dl_Region: ""
   dl_LauncherListeningPort: "17000"
   dl_LauncherServiceStartupDelay: "60"
@@ -14,64 +33,68 @@ x-client-config:
   dl_NoGuiMode: "true"
   dl_LaunchSlaveAtStartup: "false"
   dl_AutoUpdateOverride: ""
-  dl_ConnectionType: "Repository"
+  dl_IncludeRCSInLauncherMenu: "true"
+  dl_RemoteControl: "Blocked"
+  
+  dl_ConnectionType: "Direct"
   dl_NetworkRoot: "/repo"
   dl_DbSSLCertificate: ""
 
+  #dl_ConnectionType: "Remote"
+  #dl_ProxyRoot: "suncreature-deadline:4433"
+  #dl_ProxyUseSSL: "True"
+  #dl_ProxySSLCertificate: "\\172.30.23.3\suncreature\shared\01_Toolbox\01_Applications\AWSDeadline\DeadlineClient-10.3.1.4-windows-installer\Deadline10RemoteClient.pfx"
+  #dl_ProxySSLCA: ""
+  #dl_ClientSSLAuthentication: "Required"
+
+
 services:
   db:
-    image: mongo:3.6.21
+    image: mongo:6.0.12
     ports:
         - target: 27017
           published: 27017
           protocol: tcp
           mode: host
     networks:
-      - net
+      - deadline-network
     volumes:
       - type: volume
         source: db
         target: /data/db
   
-  repository:
+
+  ### Repository is only for initial setup and installation.
+  ## It needs to install with a connection to mongodb, so it cannot be installed during build process.
+  ## If repository files are detected, the installation is skipped and the container shuts down.
+  ## As the installation happens within the container, the health-check looks for a finished installation before allowing other downstream containers to start.
+  repo-setup:
     build:
       context: repository
-    image: deadline-repository
     depends_on:
       - db
     healthcheck:
-      test: ["CMD", "stat", "/repo/settings/repository.ini"]
-      interval: 10s
+      #test: ["CMD", "stat", "repo/settings/repository.ini"]
+      test: ["CMD", "stat", "repo/setup_completed.txt"]
+      interval: 30s
       timeout: 5s
       retries: 10
       start_period: 1m
     networks:
-      - net
-    environment:
-      dl_prefix: "/repo"
-      dl_mode: "unattended"
-      dl_debuglevel: "4"
-      dl_setpermissions: "true"
-      dl_installmongodb: "false"
-      dl_requireSSL: "false"
-      dl_dbssl: "false"
-      dl_dbhost: "db"
-      dl_dbport: "27017"
-      dl_dbname: "deadline10db"
-      dl_dbauth: "false"
+      - deadline-network
+    environment: *repo-setupargs
     volumes:
       - type: volume
-        source: repo
+        source: deadline-repo
         target: /repo
     restart: on-failure
 
   rcs:
     build:
       context: client
-    image: deadline-client
     depends_on:
       - db
-      - repository
+      - repo-setup
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 30s
@@ -83,67 +106,85 @@ services:
           published: 8080
           protocol: tcp
           mode: host
+  #      - target: 4433
+  #        published: 4433
+  #        protocol: tcp
+  #        mode: host
     networks:
-      - net
-    environment: *default-environment
+      - deadline-network
+    environment: *client-config
     volumes:
       - type: volume
-        source: repo
+        source: deadline-repo
         target: /repo
+      - type: volume
+        source: deadline-server
+        target: /deadline-server
     restart: on-failure
-    command: ./run.sh deadlinercs.exe
+    command: ./run.sh deadlinercs
 
-  web:
-    build:
-      context: client
-    image: deadline-client
-    depends_on:
-      - db
-      - repository
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/"]
-      interval: 30s
-      timeout: 5s
-      retries: 10
-      start_period: 1m
-    ports:
-        - target: 8082
-          published: 8082
-          protocol: tcp
-          mode: host
-    networks:
-      - net
-    volumes:
-      - type: volume
-        source: repo
-        target: /repo
-    environment: *default-environment
-    restart: on-failure
-    command: ./run.sh deadlinewebservice.exe
+  # web:
+  #   build:
+  #     context: client
+  #   image: deadline-client
+  #   depends_on:
+  #     - db
+  #     - repository
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8082/"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     retries: 10
+  #     start_period: 1m
+  #   ports:
+  #       - target: 8082
+  #         published: 8082
+  #         protocol: tcp
+  #         mode: host
+  #   networks:
+  #     - deadline-network
+  #   volumes:
+  #     - type: volume
+  #       source: repo
+  #       target: /repo
+  #   environment: *default-environment
+  #   restart: on-failure
+  #   command: ./run.sh deadlinewebservice.exe
 
-  worker:
-    build:
-      context: client
-    image: deadline-client
-    depends_on:
-      - db
-      - repository
-    networks:
-      - net
-    volumes:
-      - type: volume
-        source: repo
-        target: /repo
-    environment: *default-environment
-    restart: on-failure
-    command: ./run.sh deadlineslave.exe -nogui
+  # worker:
+  #   build:
+  #     context: client
+  #   image: deadline-client
+  #   depends_on:
+  #     - db
+  #     - repository
+  #   networks:
+  #     - deadline-network
+  #   volumes:
+  #     - type: volume
+  #       source: repo
+  #       target: /repo
+  #   environment: *default-environment
+  #   restart: on-failure
+  #   command: ./run.sh deadlineslave.exe -nogui
 
 networks:
-  net:
+  deadline-network:
     internal: false
     driver: bridge
     attachable: true
 
 volumes:
-  repo:
   db:
+  deadline-repo:
+    driver: local
+    driver_opts:
+      type: none
+      device: W:\deadline_docker\Storage\deadline-repository
+      o: bind
+  deadline-server:
+    driver: local
+    driver_opts:
+      type: none
+      device: W:\deadline_docker\Storage\deadline-server
+      o: bind
